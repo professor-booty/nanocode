@@ -1,13 +1,32 @@
-# --- Exceptions ---
+import os
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class AgentStop(Exception):
   """ Raised when the agent should stop processing. """
   pass
 
+class ToolCall:
+  """ A tool invocation request from the brain. """
+  def __init__(self, id, name, args):
+    self.id = id
+    self.name = name
+    self.args = args
+
+class Thought:
+  """ Standardized response from any Brain. """
+  def __init__(self, text=None, tool_calls=None, thinking=None):
+    self.text = text
+    self.tool_calls = tool_calls
+    self.thinking = thinking
+
 class Agent:
-  """ A coding agent that processes user input. """
-  def __init__(self):
-    pass
+  """ A coding agent th conversation memory. """
+  def __init__(self, brain):
+    self.brain = brain
+    self.conversation = []
 
   def handle_input(self, user_input):
     """ Handle user input. Returns output string, raises AgentStop to quit. """
@@ -17,19 +36,86 @@ class Agent:
     if not user_input.strip():
       return ""
 
-    return f"You said: {user_input}\n(Agent not yet connected)"
+    self.conversation.append({"role": "user", "content": user_input})
+
+    try:
+      thought = self.brain.think(self.conversation)
+      if thought.thinking:
+        lines = thought.thinking.strip().split("\n")[:5]
+        for i, line in enumerate(lines):
+          prefix = " [!] " if i == 0 else "    "
+          print(f"\033[2m{prefix}{line}\033[0m")
+      text = thought.text or ""
+      self.conversation.append({"role": "assistant", "content": text})
+      return text
+    except Exception as e:
+      self.conversation.pop()
+      return f"Error: {e}"
+
+class Claude:
+  """ Claude API - the brain of our agent. """
+  def __init__(self):
+    self.api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not self.api_key:
+      raise ValueError("ANTHROPIC_API_KEY not found in .env")
+    self.model = "claude-sonnet-4-6"
+    self.url = "https://api.anthropic.com/v1/messages"
+    
+  def think(self, conversation):
+    headers = {
+      "x-api-key": self.api_key,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json"
+    }
+    payload = {
+      "model": self.model,
+      "max_tokens": 16000,
+      "thinking": {
+        "type": "enabled",
+        "budget_tokens": 10000
+      },
+      "messages": conversation
+    }
+
+    response = requests.post(self.url, headers=headers, json=payload, timeout=120)
+    response.raise_for_status()
+    return self._parse_response(response.json()["content"])
+
+  def _parse_response(self, content):
+    """ Convert Claude's response format to Thought. """
+    text_parts = []
+    tool_calls = []
+    thinking = None
+
+    for block in content:
+      if block["type"] == "thinking":
+        thinking = block["thinking"]
+      elif block["type"] == "text":
+        text_parts.append(block["text"])
+      elif block["type"] == "tool_use":
+        tool_calls.append(ToolCall(
+          id=block["id"],
+          name=block["name"],
+          args=block["input"]
+        ))
+    return Thought(
+      text="\n".join(text_parts) if text_parts else None,
+      tool_calls=tool_calls,
+      thinking=thinking
+    )
 
 def main():
-  agent = Agent()
-  print("Nanocode v0.1 initialized.")
-  print("Type '/q' to quit.")
+  brain = Claude()
+  agent = Agent(brain)
+  print("Nanocode v0.2 initialized.")
+  print("Type '/q' to quit.\n")
 
   while True:
     try:
-      user_input = input("\n> ")
+      user_input = input("> ")
       output = agent.handle_input(user_input)
       if output:
-        print(output)
+        print(f"\n{output}\n")
     except (AgentStop, KeyboardInterrupt):
       print("\nExiting...")
       break
