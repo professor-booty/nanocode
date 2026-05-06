@@ -1,7 +1,7 @@
 import pytest
-from nanocode import Agent, AgentStop, Thought, ToolCall
+from nanocode import Agent, AgentStop, Brain, Thought, ToolCall, BRAINS
 
-class FakeBrain:
+class FakeBrain(Brain):
   """ Fake brain for testing - returns predictable responses. """
   def __init__(self, responses=None):
     self.responses = responses or [Thought(text="Fake response")]
@@ -85,4 +85,29 @@ def test_brain_receives_conversation():
   assert brain.last_conversation is not None
   assert len(brain.last_conversation) == 1
   assert brain.last_conversation[0]["content"] == "Test message"
+
+def test_agent_stores_brain_name():
+  """ Verify agent stores the brain name. """
+  agent = Agent(brain=FakeBrain(), brain_name="claude")
+  assert agent.brain_name == "claude"
+
+def test_brains_registry_has_expected_providers():
+  """ Verify BRAINS registry contains expected providers. """
+  assert "claude" in BRAINS
+  assert "deepseek" in BRAINS
+
+def test_switch_command_toggles_brain_name():
+  """ Verify /switch updates brain name. """
+  original_brains = BRAINS.copy()
+  BRAINS["claude"] = FakeBrain
+  BRAINS["deepseek"] = FakeBrain
+
+  try:
+    agent = Agent(brain=FakeBrain(), brain_name="claude")
+    result = agent.handle_input("/switch")
+    assert "deepseek" in result
+    assert agent.brain_name == "deepseek"
+  finally:
+    BRAINS.clear()
+    BRAINS.update(original_brains) 
 
